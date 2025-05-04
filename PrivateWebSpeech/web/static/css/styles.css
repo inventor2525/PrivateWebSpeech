@@ -1,0 +1,81 @@
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    background-color: #f0f0f0;
+}
+button {
+    padding: 10px 20px;
+    margin: 5px;
+    font-size: 16px;
+    cursor: pointer;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+}
+button:hover {
+    background-color: #45a049;
+}
+button:disabled {
+    background-color: #cccccc;
+    cursor: not-allowed;
+}
+#audioPlayer {
+    margin-top: 20px;
+    width: 100%;
+    max-width: 500px;
+}
+.status {
+    margin-top: 10px;
+    font-style: italic;
+    color: #555;
+}
+textarea {
+    width: 100%;
+    max-width: 500px;
+    height: 150px;
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    font-family: inherit;
+    resize: vertical;
+}
+.section {
+    background-color: white;
+    padding: 20px;
+    border-radius: 10px;
+    margin: 15px 0;
+    width: 100%;
+    max-width: 550px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+h2 {
+    color: #333;
+    margin-top: 0;
+}
+#transcriptionBox {
+    width: 100%;
+    max-width: 500px;
+    height: 200px;
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    font-family: inherit;
+    resize: vertical;
+    background-color: #f9f9f9;
+    overflow-y: auto;
+}
+.full-transcript {
+    margin-top: 20px;
+    padding: 10px;
+    background-color: #e8f4f8;
+    border: 1px solid #a8d1df;
+    border-radius: 5px;
+    white-space: pre-wrap;
+    font-family: monospace;
+}

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>Audio Streaming</title>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+	<script src="{{ url_for('static', filename='js/speech_client.js') }}"></script>
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+	<h1>Audio Streaming & Text-to-Speech</h1>
+	<div class="section">
+		<h2>Voice Recording</h2>
+		<button id="startBtn" onclick="startRecording()">Start Recording</button>
+		<button id="stopBtn" onclick="stopRecording()">Stop Recording</button>
+		<button id="playLastBtn" onclick="playLastRecording()">Play Last Recording</button>
+		<div id="recordStatus" class="status">Ready to record</div>
+		<div id="playStatus" class="status"></div>
+	</div>
+	<div class="section">
+		<h2>Text-to-Speech</h2>
+		<textarea id="ttsText" placeholder="Enter text to be spoken..."></textarea>
+		<button id="speakBtn" onclick="speakText()">Speak Text</button>
+		<div id="ttsStatus" class="status">Ready to speak</div>
+	</div>
+	<div class="section">
+		<h2>Transcription</h2>
+		<div id="transcriptionBox"></div>
+		<button id="clearTranscriptBtn" onclick="clearTranscript()">Clear Transcript</button>
+	</div>
+</body>
+</html>
