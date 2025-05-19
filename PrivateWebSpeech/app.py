@@ -16,6 +16,8 @@ from pyannote.audio.pipelines import VoiceActivityDetection
 import subprocess
 import warnings
 import queue
+from vad import VAD
+from datetime import datetime
 
 warnings.filterwarnings("ignore", category=UserWarning, module="speechbrain")
 
@@ -34,6 +36,27 @@ kokoro_pipeline = None
 vad_model = None
 vad_pipeline = None
 whisper_model = None
+
+# Initialize VAD
+vad = VAD(model_path="pytorch_model.bin")
+vad.start()
+
+# Thread to process VAD segments
+def vad_segment_processor():
+    for segment in vad.voice_segments():
+        print(f"VAD segment: {segment['start_time']} to {segment['end_time']}")
+        socketio.emit('vad_detection', {
+            'segments': [{
+                'start': (segment['start_time'] - datetime(1970, 1, 1)).total_seconds(),
+                'end': (segment['end_time'] - datetime(1970, 1, 1)).total_seconds(),
+                'duration': (segment['end_time'] - segment['start_time']).total_seconds(),
+                'server_start': (segment['start_time'] - datetime(1970, 1, 1)).total_seconds(),
+                'server_end': (segment['end_time'] - datetime(1970, 1, 1)).total_seconds()
+            }]
+        })
+
+vad_processor_thread = threading.Thread(target=vad_segment_processor, daemon=True)
+vad_processor_thread.start()
 
 def get_kokoro_pipeline():
     global kokoro_pipeline
@@ -192,16 +215,9 @@ def handle_audio_chunk_data(data):
                 f.write(binary_data)
             wav_path = os.path.join(temp_dir, "chunk.wav")
             if convert_to_wav(temp_webm, wav_path) and os.path.exists(wav_path):
-                try:
-                    vad_results = detect_voice_activity(wav_path)
-                    print(f"Voice activity detection for session {sid}: {vad_results}")
-                    if vad_results:
-                        emit('vad_detection', {'segments': vad_results})
-                    else:
-                        print(f"No voice activity detected in chunk for session {sid}")
-                except Exception as e:
-                    print(f"VAD error: {e}")
-                    emit('processing_error', {'message': 'VAD processing failed'})
+                # Feed chunk to VAD
+                vad.add_audio_chunk(wav_path)
+                # Existing transcription code
                 try:
                     transcription = transcribe_audio(wav_path)
                     if transcription:
@@ -240,7 +256,6 @@ def stop_recording():
                 if remux_webm(filename, remuxed_file):
                     shutil.move(remuxed_file, filename)
                     print(f"Remuxed WebM file for session {sid}: {filename}, duration: {get_file_duration(filename)}s")
-                    
                     # Convert full recording to WAV for transcription
                     full_wav_path = os.path.join(temp_dir, "full_recording.wav")
                     if convert_to_wav(filename, full_wav_path) and os.path.exists(full_wav_path):
