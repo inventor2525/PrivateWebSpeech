@@ -162,7 +162,11 @@ class VAD:
                     segment_data = concat(segments).data
 
             segment_duration = self._audio_segment_duration(segment_data)
-            segment_vad_result = self._check_voice_activity(segment_data)
+            try:
+                segment_vad_result = self._check_voice_activity(segment_data)
+            except Exception as e:
+                print(f"VAD processing error: {e}")
+                segment_vad_result = []  # Empty result to continue processing
 
             if not voice_detected and len(segment_vad_result):
                 voice_detected = True
@@ -183,7 +187,11 @@ class VAD:
                 if silent_duration >= self.window_padding:
                     full_segment = concat(voice_detected_segments)
                     total_duration = self._audio_segment_duration(full_segment.data)
-                    total_vad_result = self._check_voice_activity(full_segment.data)
+                    try:
+                        total_vad_result = self._check_voice_activity(full_segment.data)
+                    except Exception as e:
+                        print(f"VAD processing error on full segment: {e}")
+                        total_vad_result = []
 
                     if len(total_vad_result) > 0:
                         silent_duration = total_duration - list(total_vad_result.get_timeline())[-1].end
@@ -208,9 +216,13 @@ class VAD:
 
         if voice_detected:
             last_audio = concat(voice_detected_segments)
-            if last_audio and last_audio.data.size > 0 and len(self._check_voice_activity(last_audio.data)) > 0:
-                with self.segment_lock:
-                    self.vocal_segments.append(last_audio)
+            if last_audio and last_audio.data.size > 0:
+                try:
+                    if len(self._check_voice_activity(last_audio.data)) > 0:
+                        with self.segment_lock:
+                            self.vocal_segments.append(last_audio)
+                except Exception as e:
+                    print(f"VAD processing error on final segment: {e}")
 
     def _check_voice_activity(self, audio_data: np.ndarray) -> VoiceActivityDetection:
         """
@@ -222,7 +234,10 @@ class VAD:
         Returns:
             VoiceActivityDetection: The result of the voice activity detection.
         """
-        waveform = torch.from_numpy(audio_data).float().t()
+        # Ensure audio_data is 1D and convert to (1, time) tensor for pyannote
+        if audio_data.ndim > 1:
+            audio_data = audio_data.flatten()
+        waveform = torch.from_numpy(audio_data).float().unsqueeze(0)  # Shape: (1, time)
         return self.pipeline({'waveform': waveform, 'sample_rate': self.sample_rate})
 
     def _trim_buffer_queue(self, required_duration: float) -> None:
