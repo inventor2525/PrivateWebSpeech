@@ -44,30 +44,49 @@ vad.start()
 # Thread to process VAD segments
 def vad_segment_processor():
     for segment in vad.voice_segments():
-        print(f"VAD segment: {segment['start_time']} to {segment['end_time']}")
+        start_time = segment['start_time']
+        end_time = segment['end_time']
+        print(f"VAD segment: {start_time} to {end_time}")
+        
+        # Create timestamp strings for file naming
+        start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
+        end_timestamp = end_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
+        timestamp_suffix = f"Start{start_timestamp}____End{end_timestamp}"
+        
+        # Save VAD audio segment
+        audio_segment = segment['audio']
+        vad_audio_filename = f"vad_audio_{timestamp_suffix}.wav"
+        audio_segment.export(vad_audio_filename, format="wav")
+        print(f"Saved VAD audio segment: {vad_audio_filename}")
         
         # Create temporary file for transcription
         temp_dir = tempfile.mkdtemp()
         try:
-            # Export audio segment to temporary WAV file
-            audio_segment = segment['audio']
+            # Export audio segment to temporary WAV file for transcription
             temp_wav_path = os.path.join(temp_dir, "vad_segment.wav")
             audio_segment.export(temp_wav_path, format="wav")
             
             # Transcribe the audio segment
             model = get_whisper_model()
             segments, _ = model.transcribe(temp_wav_path, beam_size=5)
-            transcription_text = ' '.join([s.text for s in segments]).strip()
+            transcription_text = ' '.join([s.text for s in segments])
             
-            if transcription_text:
+            # Save transcription (always, even if empty)
+            vad_transcription_filename = f"vad_transcription_{timestamp_suffix}.txt"
+            with open(vad_transcription_filename, 'w', encoding='utf-8') as f:
+                f.write(transcription_text)
+            print(f"Saved VAD transcription: {vad_transcription_filename}")
+            
+            # Only send to client if transcription is not empty after stripping
+            if transcription_text.strip():
                 print(f"VAD transcription: {transcription_text}")
                 socketio.emit('streaming_transcription', {
-                    'text': transcription_text,
-                    'start_time': (segment['start_time'] - datetime(1970, 1, 1)).total_seconds(),
-                    'end_time': (segment['end_time'] - datetime(1970, 1, 1)).total_seconds()
+                    'text': transcription_text.strip(),
+                    'start_time': (start_time - datetime(1970, 1, 1)).total_seconds(),
+                    'end_time': (end_time - datetime(1970, 1, 1)).total_seconds()
                 })
             else:
-                print("No transcription generated for VAD segment")
+                print("Empty transcription for VAD segment (not sent to client)")
                 
         except Exception as e:
             print(f"Error transcribing VAD segment: {e}")
@@ -197,9 +216,15 @@ def handle_log_event(message):
 @socketio.on('start_recording')
 def start_recording():
     sid = request.sid
-    timestamp = int(time.time())
-    filename = f"recording_{sid}_{timestamp}.webm"
-    client_files[sid] = {'file': open(filename, 'wb'), 'lock': threading.Lock()}
+    start_time = datetime.now()
+    start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
+    filename = f"mic_recording_Start{start_timestamp}.webm"
+    client_files[sid] = {
+        'file': open(filename, 'wb'), 
+        'lock': threading.Lock(),
+        'start_time': start_time,
+        'temp_filename': filename
+    }
     client_chunks[sid] = {'header': None, 'chunk_count': 0}
     last_recordings[sid] = filename
     emit('recording_started', {'filename': filename})
@@ -265,19 +290,30 @@ def handle_audio_chunk_data(data):
 def stop_recording():
     sid = request.sid
     if sid in client_files:
+        end_time = datetime.now()
+        start_time = client_files[sid]['start_time']
+        temp_filename = client_files[sid]['temp_filename']
+        
         with client_files[sid]['lock']:
             client_files[sid]['file'].close()
-        filename = last_recordings.get(sid)
-        if filename and os.path.exists(filename):
+            
+        # Create final filename with start and end timestamps
+        start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
+        end_timestamp = end_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
+        final_filename = f"mic_recording_Start{start_timestamp}____End{end_timestamp}.webm"
+        
+        if os.path.exists(temp_filename):
             temp_dir = tempfile.mkdtemp()
             try:
                 remuxed_file = os.path.join(temp_dir, "remuxed.webm")
-                if remux_webm(filename, remuxed_file):
-                    shutil.move(remuxed_file, filename)
-                    print(f"Remuxed WebM file for session {sid}: {filename}, duration: {get_file_duration(filename)}s")
+                if remux_webm(temp_filename, remuxed_file):
+                    shutil.move(remuxed_file, final_filename)
+                    os.remove(temp_filename)  # Remove temporary file
+                    last_recordings[sid] = final_filename
+                    print(f"Remuxed WebM file for session {sid}: {final_filename}, duration: {get_file_duration(final_filename)}s")
                     # Convert full recording to WAV for transcription
                     full_wav_path = os.path.join(temp_dir, "full_recording.wav")
-                    if convert_to_wav(filename, full_wav_path) and os.path.exists(full_wav_path):
+                    if convert_to_wav(final_filename, full_wav_path) and os.path.exists(full_wav_path):
                         try:
                             print(f"Transcribing full recording for session {sid}")
                             transcription = transcribe_audio(full_wav_path)
@@ -288,7 +324,8 @@ def stop_recording():
                                     full_transcript = transcript_text
                                     print(f"Full transcription for session {sid}: {transcript_text}")
                                     #emit('transcription', {'text': full_transcript+"\n\n"})
-                                    with open(filename.replace("recording_","stt_full_transcription_").replace(".webm",".txt"), 'w') as f:
+                                    transcription_filename = final_filename.replace("mic_recording_","stt_full_transcription_").replace(".webm",".txt")
+                                    with open(transcription_filename, 'w') as f:
                                         f.write(full_transcript)
                                 else:
                                     print(f"No full transcription text generated for session {sid}")
@@ -454,9 +491,10 @@ def speak_text(data):
     if not text:
         emit('tts_error', {'message': "No text provided"})
         return
-    timestamp = int(time.time())
-    text_filename = f"tts_text_{sid}_{timestamp}.txt"
-    audio_filename = f"tts_audio_{sid}_{timestamp}.webm"
+    request_time = datetime.now()
+    timestamp = request_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
+    text_filename = f"tts_text_{timestamp}.txt"
+    audio_filename = f"tts_audio_{timestamp}.webm"
     try:
         with open(text_filename, 'w', encoding='utf-8') as f:
             f.write(text)

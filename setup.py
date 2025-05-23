@@ -17,6 +17,7 @@ setup(
         "faster-whisper",
         "pyannote.audio",
         "numpy",
+		"pydub"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

@@ -192,6 +192,11 @@ function appendStreamingTranscript(text) {
 	console.log('Appended streaming transcription:', text);
 }
 
+function formatTimestamp(unixTimestamp) {
+	const date = new Date(unixTimestamp * 1000);
+	return date.toTimeString().split(' ')[0];
+}
+
 function displayFullTranscript(text) {
 	// Remove any existing full transcript display
 	let fullTranscriptDiv = document.getElementById('fullTranscript');
@@ -263,7 +268,10 @@ socket.on('full_transcription', (data) => {
 });
 socket.on('streaming_transcription', (data) => { 
 	console.log('Received streaming transcription:', data.text); 
-	appendStreamingTranscript(data.text); 
+	appendStreamingTranscript(data.text);
+	// Update VAD timing display
+	document.getElementById('vadStartTime').textContent = formatTimestamp(data.start_time);
+	document.getElementById('vadEndTime').textContent = formatTimestamp(data.end_time);
 });
 socket.on('vad_detection', (data) => console.log('Voice activity detected:', data.segments));
 socket.on('processing_error', (data) => {
