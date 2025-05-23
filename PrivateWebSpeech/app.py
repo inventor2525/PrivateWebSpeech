@@ -45,15 +45,34 @@ vad.start()
 def vad_segment_processor():
     for segment in vad.voice_segments():
         print(f"VAD segment: {segment['start_time']} to {segment['end_time']}")
-        socketio.emit('vad_detection', {
-            'segments': [{
-                'start': (segment['start_time'] - datetime(1970, 1, 1)).total_seconds(),
-                'end': (segment['end_time'] - datetime(1970, 1, 1)).total_seconds(),
-                'duration': (segment['end_time'] - segment['start_time']).total_seconds(),
-                'server_start': (segment['start_time'] - datetime(1970, 1, 1)).total_seconds(),
-                'server_end': (segment['end_time'] - datetime(1970, 1, 1)).total_seconds()
-            }]
-        })
+        
+        # Create temporary file for transcription
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # Export audio segment to temporary WAV file
+            audio_segment = segment['audio']
+            temp_wav_path = os.path.join(temp_dir, "vad_segment.wav")
+            audio_segment.export(temp_wav_path, format="wav")
+            
+            # Transcribe the audio segment
+            model = get_whisper_model()
+            segments, _ = model.transcribe(temp_wav_path, beam_size=5)
+            transcription_text = ' '.join([s.text for s in segments]).strip()
+            
+            if transcription_text:
+                print(f"VAD transcription: {transcription_text}")
+                socketio.emit('streaming_transcription', {
+                    'text': transcription_text,
+                    'start_time': (segment['start_time'] - datetime(1970, 1, 1)).total_seconds(),
+                    'end_time': (segment['end_time'] - datetime(1970, 1, 1)).total_seconds()
+                })
+            else:
+                print("No transcription generated for VAD segment")
+                
+        except Exception as e:
+            print(f"Error transcribing VAD segment: {e}")
+        finally:
+            shutil.rmtree(temp_dir)
 
 vad_processor_thread = threading.Thread(target=vad_segment_processor, daemon=True)
 vad_processor_thread.start()
@@ -268,7 +287,7 @@ def stop_recording():
                                     # Format with delimiters
                                     full_transcript = transcript_text
                                     print(f"Full transcription for session {sid}: {transcript_text}")
-                                    emit('transcription', {'text': full_transcript+"\n\n"})
+                                    #emit('transcription', {'text': full_transcript+"\n\n"})
                                     with open(filename.replace("recording_","stt_full_transcription_").replace(".webm",".txt"), 'w') as f:
                                         f.write(full_transcript)
                                 else:

@@ -8,6 +8,7 @@ from pyannote.audio.pipelines import VoiceActivityDetection
 from pydub import AudioSegment
 import soundfile as sf
 from dataclasses import dataclass
+from typing import Iterator, Dict
 
 class VAD:
     """
@@ -239,7 +240,7 @@ class VAD:
                 self.silent_peeks_buffer = self.silent_peeks_buffer[-(i+1):]
                 break
 
-    def voice_segments(self) -> Iterator[dict]:
+    def voice_segments(self) -> Iterator[Dict[str, AudioSegment | datetime]]:
         """
         Iterate AudioSegments containing voice as they become available.
 

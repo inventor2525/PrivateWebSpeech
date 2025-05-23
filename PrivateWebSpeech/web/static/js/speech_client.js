@@ -84,7 +84,12 @@ function stopRecording() {
 	}
 	isRecording = false;
 	updateButtons();
-	document.getElementById('recordStatus').textContent = 'Recording stopped, processing full transcription...';
+	document.getElementById('recordStatus').textContent = 'Recording stopped';
+	// Add paragraph break when recording stops
+	currentTranscript += "\n\n";
+	const transcriptionBox = document.getElementById('transcriptionBox');
+	transcriptionBox.innerText = currentTranscript;
+	transcriptionBox.scrollTop = transcriptionBox.scrollHeight;
 }
 
 function playLastRecording() {
@@ -172,15 +177,19 @@ function startPlayback() {
 }
 
 function appendTranscript(text) {
-	if (text && text.trim()) {
-		currentTranscript += text;
-		const transcriptionBox = document.getElementById('transcriptionBox');
-		transcriptionBox.innerText = currentTranscript;
-		transcriptionBox.scrollTop = transcriptionBox.scrollHeight;
-		console.log('Appended transcription:', text);
-	} else {
-		console.log('Empty or invalid transcription received');
-	}
+	currentTranscript += text;
+	const transcriptionBox = document.getElementById('transcriptionBox');
+	transcriptionBox.innerText = currentTranscript;
+	transcriptionBox.scrollTop = transcriptionBox.scrollHeight;
+	console.log('Appended transcription:', text);
+}
+
+function appendStreamingTranscript(text) {
+	currentTranscript += text + " ";
+	const transcriptionBox = document.getElementById('transcriptionBox');
+	transcriptionBox.innerText = currentTranscript;
+	transcriptionBox.scrollTop = transcriptionBox.scrollHeight;
+	console.log('Appended streaming transcription:', text);
 }
 
 function displayFullTranscript(text) {
@@ -251,6 +260,10 @@ socket.on('full_transcription', (data) => {
 	console.log('Received full transcription:', data.text); 
 	document.getElementById('recordStatus').textContent = 'Recording stopped';
 	displayFullTranscript(data.text); 
+});
+socket.on('streaming_transcription', (data) => { 
+	console.log('Received streaming transcription:', data.text); 
+	appendStreamingTranscript(data.text); 
 });
 socket.on('vad_detection', (data) => console.log('Voice activity detected:', data.segments));
 socket.on('processing_error', (data) => {
