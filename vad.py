@@ -59,6 +59,7 @@ class VAD:
             "min_duration_on": min_duration_on,
             "min_duration_off": min_duration_off
         })
+        self.pipeline.to(torch.device("cuda"))
 
         self.paused = False
         self.running = False
