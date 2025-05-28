@@ -239,7 +239,6 @@ socket.on('playback_error', (data) => {
 	document.getElementById('ttsStatus').textContent = '';
 	socket.emit('log_event', `Playback error: ${data.message}`);
 });
-socket.on('tts_started', (data) => console.log('TTS started for:', data.filename));
 socket.on('tts_chunk_ready', (data) => {
 	console.log('Received TTS chunk');
 	socket.emit('log_event', `Received TTS chunk ${chunkCount}`);

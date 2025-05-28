@@ -218,7 +218,7 @@ def start_recording():
     sid = request.sid
     start_time = datetime.now()
     start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
-    filename = f"mic_recording_Start{start_timestamp}.webm"
+    filename = f"mic_recording_Start_{sid}_{start_timestamp}.webm"
     client_files[sid] = {
         'file': open(filename, 'wb'), 
         'lock': threading.Lock(),
@@ -285,7 +285,7 @@ def stop_recording():
         # Create final filename with start and end timestamps
         start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
         end_timestamp = end_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
-        final_filename = f"mic_recording_Start{start_timestamp}____End{end_timestamp}.webm"
+        final_filename = f"mic_recording_Start_{sid}_{start_timestamp}____End{end_timestamp}.webm"
         
         if os.path.exists(temp_filename):
             temp_dir = tempfile.mkdtemp()
@@ -449,21 +449,23 @@ def speak_text(data):
     text = data.get('text', '').strip()
     if not text:
         emit('tts_error', {'message': "No text provided"})
+        print("No text provided in tts")
         return
+    
     request_time = datetime.now()
     timestamp = request_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
-    text_filename = f"tts_text_{timestamp}.txt"
-    audio_filename = f"tts_audio_{timestamp}.webm"
+    text_filename = f"tts_text_{sid}_{timestamp}.txt"
+    audio_filename = f"tts_audio_{sid}_{timestamp}.webm"
+    
     try:
         with open(text_filename, 'w', encoding='utf-8') as f:
             f.write(text)
-        emit('tts_started', {'filename': audio_filename})
         pipeline = get_kokoro_pipeline()
         temp_dir = tempfile.mkdtemp()
+        
         try:
             full_audio = None
             generator = pipeline(text, voice='af_heart')
-            chunk_num = 0
             for i, (gs, ps, audio) in enumerate(generator):
                 if not isinstance(audio, np.ndarray):
                     audio = np.asarray(audio, dtype=np.float32)
@@ -480,8 +482,7 @@ def speak_text(data):
                     with open(chunk_webm, 'rb') as f:
                         chunk_data = f.read()
                     b64_chunk = base64.b64encode(chunk_data).decode('utf-8')
-                    chunk_num += 1
-                    print(f"Sending chunk {chunk_num} of {len(chunk_data)} bytes for speaking text")
+                    print(f"Sending chunk {i} of {len(chunk_data)} bytes for speaking text")
                     emit('tts_chunk_ready', {'chunk': b64_chunk})
                     socketio.sleep(0.01)
                     os.remove(chunk_wav)
@@ -490,6 +491,7 @@ def speak_text(data):
                     print(f"Failed to convert chunk {i} to WebM for session {sid}")
                     emit('tts_error', {'message': f"Failed to convert chunk {i} to WebM"})
                     break
+            
             if full_audio is not None:
                 temp_wav = os.path.join(temp_dir, f"full_{sid}.wav")
                 sf.write(temp_wav, full_audio, 24000)
