@@ -235,12 +235,29 @@ class VAD:
         Returns:
             VoiceActivityDetection: The result of the voice activity detection.
         """
+        # Log input audio data statistics
+        print(f"Input audio_data shape: {audio_data.shape}, size: {audio_data.size}")
+        print(f"Input audio_data dtype: {audio_data.dtype}")
+        print(f"Input audio_data min: {np.min(audio_data)}, max: {np.max(audio_data)}, mean: {np.mean(audio_data)}")
+
         # Ensure audio_data is 1D and convert to (1, time) tensor for pyannote
         if audio_data.ndim > 1:
+            print(f"Flattening audio_data from shape {audio_data.shape} to 1D")
             audio_data = audio_data.flatten()
-        waveform = torch.from_numpy(audio_data).float().unsqueeze(0)  # Shape: (1, time)
-        return self.pipeline({'waveform': waveform, 'sample_rate': self.sample_rate})
+        
+        # Log audio data after flattening (if applicable)
+        print(f"Post-flatten audio_data shape: {audio_data.shape}, size: {audio_data.size}")
+        print(f"Post-flatten audio_data min: {np.min(audio_data)}, max: {np.max(audio_data)}, mean: {np.mean(audio_data)}")
 
+        # Convert to PyTorch tensor and unsqueeze
+        waveform = torch.from_numpy(audio_data).float().unsqueeze(0)  # Shape: (1, time)
+        
+        # Log final waveform tensor before pipeline
+        print(f"Waveform tensor shape: {waveform.shape}, size: {waveform.numel()}")
+        print(f"Waveform tensor min: {waveform.min().item()}, max: {waveform.max().item()}, mean: {waveform.mean().item()}")
+
+        # Process with pipeline
+        return self.pipeline({'waveform': waveform, 'sample_rate': self.sample_rate})
     def _trim_buffer_queue(self, required_duration: float) -> None:
         """
         Trim the silent_peeks_buffer queue to maintain only the required duration.
