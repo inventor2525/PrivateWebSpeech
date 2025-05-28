@@ -289,9 +289,11 @@ class VAD:
                         self.segment_available.clear()
                     yield_time = datetime.now()
                     print(f"Yielding audio stopped {(yield_time - segment.end_time).total_seconds()} seconds ago.")
+                    # Scale float64 [-1, 1] to int16 [-32768, 32767]
+                    scaled_data = (segment.data * 32767).astype(np.int16)
                     audio_segment = AudioSegment(
-                        data=segment.data.tobytes(),
-                        sample_width=2,
+                        data=scaled_data.tobytes(),
+                        sample_width=2,  # 16-bit PCM
                         frame_rate=self.sample_rate,
                         channels=1
                     )
