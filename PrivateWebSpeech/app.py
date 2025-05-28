@@ -261,21 +261,6 @@ def handle_audio_chunk_data(data):
             if convert_to_wav(temp_webm, wav_path) and os.path.exists(wav_path):
                 # Feed chunk to VAD
                 vad.add_audio_chunk(wav_path)
-                # Existing transcription code
-                try:
-                    transcription = transcribe_audio(wav_path)
-                    if transcription:
-                        transcript_text = ' '.join([segment['text'] for segment in transcription]).strip()
-                        if transcript_text:
-                            print(f"Transcription for session {sid}: {transcript_text}")
-                            #emit('transcription', {'text': transcript_text})
-                        else:
-                            print(f"No transcription text generated for session {sid}")
-                    else:
-                        print(f"No transcription results for session {sid}")
-                except Exception as e:
-                    print(f"Transcription error: {e}")
-                    emit('processing_error', {'message': 'Transcription failed'})
             else:
                 print(f"WAV file not created for session {sid}")
                 emit('processing_error', {'message': 'WAV conversion failed'})
@@ -311,32 +296,6 @@ def stop_recording():
                     os.remove(temp_filename)  # Remove temporary file
                     last_recordings[sid] = final_filename
                     print(f"Remuxed WebM file for session {sid}: {final_filename}, duration: {get_file_duration(final_filename)}s")
-                    # Convert full recording to WAV for transcription
-                    full_wav_path = os.path.join(temp_dir, "full_recording.wav")
-                    if convert_to_wav(final_filename, full_wav_path) and os.path.exists(full_wav_path):
-                        try:
-                            print(f"Transcribing full recording for session {sid}")
-                            transcription = transcribe_audio(full_wav_path)
-                            if transcription:
-                                transcript_text = ' '.join([segment['text'] for segment in transcription]).strip()
-                                if transcript_text:
-                                    # Format with delimiters
-                                    full_transcript = transcript_text
-                                    print(f"Full transcription for session {sid}: {transcript_text}")
-                                    #emit('transcription', {'text': full_transcript+"\n\n"})
-                                    transcription_filename = final_filename.replace("mic_recording_","stt_full_transcription_").replace(".webm",".txt")
-                                    with open(transcription_filename, 'w') as f:
-                                        f.write(full_transcript)
-                                else:
-                                    print(f"No full transcription text generated for session {sid}")
-                            else:
-                                print(f"No full transcription results for session {sid}")
-                        except Exception as e:
-                            print(f"Full transcription error: {e}")
-                            emit('processing_error', {'message': f'Full transcription failed: {str(e)}'})
-                    else:
-                        print(f"Full WAV conversion failed for session {sid}")
-                        emit('processing_error', {'message': 'Full recording WAV conversion failed'})
                 else:
                     print(f"Failed to remux WebM file for session {sid}")
             finally:
