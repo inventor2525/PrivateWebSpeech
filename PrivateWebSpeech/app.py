@@ -155,19 +155,6 @@ def convert_to_webm(input_file, output_file):
         print("FFmpeg WebM conversion timed out")
         return False
 
-def remux_webm(input_file, output_file):
-    try:
-        subprocess.run([
-            'ffmpeg', '-i', input_file, '-c', 'copy', '-f', 'webm', '-y', output_file
-        ], check=True, stderr=subprocess.PIPE, timeout=10)
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Error remuxing WebM: {e.stderr.decode()}")
-        return False
-    except subprocess.TimeoutExpired:
-        print("FFmpeg remuxing timed out")
-        return False
-
 def detect_voice_activity(audio_file):
     pipeline = get_vad_pipeline()
     vad_result = pipeline(audio_file)
@@ -208,7 +195,7 @@ def start_recording():
     sid = request.sid
     start_time = datetime.now()
     start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
-    filename = f"mic_recording_Start_{sid}_{start_timestamp}.webm"
+    filename = f"mic_recording_Start_{sid}_{start_timestamp}.wav"
     client_files[sid] = {
         'file': open(filename, 'wb'), 
         'lock': threading.Lock(),
@@ -236,24 +223,21 @@ def handle_audio_chunk_data(data):
             client_files[sid]['file'].write(binary_data)
             client_files[sid]['file'].flush()
         if client_chunks[sid]['chunk_count'] == 0:
-            client_chunks[sid]['header'] = binary_data
             client_chunks[sid]['chunk_count'] += 1
             print(f"Stored header for session {sid}, size: {len(binary_data)}, first 20 bytes: {binary_data[:20].hex()}")
             return
         client_chunks[sid]['chunk_count'] += 1
         temp_dir = tempfile.mkdtemp()
         try:
-            temp_webm = os.path.join(temp_dir, "chunk.webm")
-            with open(temp_webm, 'wb') as f:
-                f.write(client_chunks[sid]['header'])
+            temp_wav = os.path.join(temp_dir, "chunk.wav")
+            with open(temp_wav, 'wb') as f:
                 f.write(binary_data)
-            wav_path = os.path.join(temp_dir, "chunk.wav")
-            if convert_to_wav(temp_webm, wav_path) and os.path.exists(wav_path):
+            if os.path.exists(temp_wav):
                 # Feed chunk to VAD
-                vad.add_audio_chunk(wav_path)
+                vad.add_audio_chunk(temp_wav)
             else:
                 print(f"WAV file not created for session {sid}")
-                emit('processing_error', {'message': 'WAV conversion failed'})
+                emit('processing_error', {'message': 'WAV file creation failed'})
         finally:
             shutil.rmtree(temp_dir)
         print(f"Chunk processing took {time.time() - start_time}s")
@@ -275,21 +259,15 @@ def stop_recording():
         # Create final filename with start and end timestamps
         start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
         end_timestamp = end_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
-        final_filename = f"mic_recording_Start_{sid}_{start_timestamp}____End{end_timestamp}.webm"
+        final_filename = f"mic_recording_Start_{sid}_{start_timestamp}____End{end_timestamp}.wav"
         
         if os.path.exists(temp_filename):
-            temp_dir = tempfile.mkdtemp()
             try:
-                remuxed_file = os.path.join(temp_dir, "remuxed.webm")
-                if remux_webm(temp_filename, remuxed_file):
-                    shutil.move(remuxed_file, final_filename)
-                    os.remove(temp_filename)  # Remove temporary file
-                    last_recordings[sid] = final_filename
-                    print(f"Remuxed WebM file for session {sid}: {final_filename}, duration: {get_file_duration(final_filename)}s")
-                else:
-                    print(f"Failed to remux WebM file for session {sid}")
-            finally:
-                shutil.rmtree(temp_dir)
+                shutil.move(temp_filename, final_filename)
+                last_recordings[sid] = final_filename
+                print(f"Saved WAV file for session {sid}: {final_filename}, duration: {get_file_duration(final_filename)}s")
+            except Exception as e:
+                print(f"Failed to save WAV file for session {sid}: {e}")
         del client_files[sid]
     emit('recording_stopped')
     print(f"Stopped recording for session {sid}")
@@ -317,14 +295,8 @@ def play_last_recording():
 
     def chunk_worker():
         try:
-            # Load the entire WebM file into a temporary file
-            full_webm = os.path.join(temp_dir, "full.webm")
-            with open(filename, 'rb') as f:
-                with open(full_webm, 'wb') as out_f:
-                    out_f.write(f.read())
-
             # Get the duration of the file
-            duration = get_file_duration(full_webm)
+            duration = get_file_duration(filename)
             if duration <= 0:
                 print(f"Invalid duration for {filename}")
                 chunk_queue.put(('error', {'message': "Invalid recording duration"}))
@@ -346,24 +318,27 @@ def play_last_recording():
                 if remaining_duration <= 0:
                     break
 
-                output_webm = os.path.join(temp_dir, f"chunk_{chunk_num}.webm")
+                output_wav = os.path.join(temp_dir, f"chunk_{chunk_num}.wav")
                 try:
+                    # Use FFmpeg to stream chunk directly to file
                     subprocess.run([
-                        'ffmpeg', '-i', full_webm,
+                        'ffmpeg', '-i', filename,
                         '-ss', str(start_time),  # Start time
                         '-t', str(remaining_duration),  # Capped duration
-                        '-c:a', 'copy',  # Copy audio stream without re-encoding
-                        '-f', 'webm', '-y', output_webm
+                        '-c:a', 'pcm_s16le',  # Use PCM for WAV
+                        '-ar', '16000',  # Match sample rate
+                        '-ac', '1',  # Mono
+                        '-f', 'wav', '-y', output_wav
                     ], check=True, stderr=subprocess.PIPE, timeout=15)
 
-                    if os.path.exists(output_webm):
-                        with open(output_webm, 'rb') as f:
+                    if os.path.exists(output_wav):
+                        with open(output_wav, 'rb') as f:
                             chunk_data = f.read()
                         b64_chunk = base64.b64encode(chunk_data).decode('utf-8')
                         chunk_queue.put(('chunk', (chunk_num + 1, b64_chunk, len(chunk_data))))
                         chunk_ready.set()
                         chunk_num += 1
-                        os.remove(output_webm)  # Clean up chunk file
+                        os.remove(output_wav)  # Clean up chunk file
                     else:
                         print(f"Failed to create chunk {chunk_num + 1} for session {sid}")
                         chunk_queue.put(('error', {'message': f"Failed to create chunk {chunk_num + 1}"}))

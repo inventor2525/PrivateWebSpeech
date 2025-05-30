@@ -24,13 +24,13 @@ async function startRecording() {
 	try {
 		stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 } });
 		console.log('Audio stream initialized:', stream);
-		const selectedType = 'audio/webm;codecs=opus';
+		const selectedType = 'audio/wav';
 		if (!MediaRecorder.isTypeSupported(selectedType)) {
-			console.warn('audio/webm;codecs=opus not supported, falling back to default');
+			console.warn('audio/wav not supported, falling back to default');
 			mediaRecorder = new MediaRecorder(stream);
 		} else {
 			console.log('Using MIME type:', selectedType);
-			mediaRecorder = new MediaRecorder(stream, { mimeType: selectedType, audioBitsPerSecond: 128000 });
+			mediaRecorder = new MediaRecorder(stream, { mimeType: selectedType });
 		}
 		
 		mediaRecorder.ondataavailable = (event) => {
@@ -41,12 +41,12 @@ async function startRecording() {
 					if (reader.result) {
 						const base64data = reader.result.split(',')[1];
 						socket.emit('audio_chunk_data', base64data);
-						console.log('Sent WebM chunk, size:', event.data.size);
+						console.log('Sent WAV chunk, size:', event.data.size);
 					} else {
-						console.error('Failed to read WebM chunk');
+						console.error('Failed to read WAV chunk');
 					}
 				};
-				reader.onerror = () => console.error('Error reading WebM chunk');
+				reader.onerror = () => console.error('Error reading WAV chunk');
 				reader.readAsDataURL(event.data);
 			} else {
 				console.warn('Received empty audio chunk');
@@ -115,13 +115,14 @@ function speakText() {
 	socket.emit('speak_text', {text: text});
 }
 
-async function decodeAndPlayAudio(audioData) {
+async function decodeAndPlayAudio(audioData, isTTS = false) {
 	try {
 		const binaryString = atob(audioData);
 		console.log('Decoding chunk, size:', binaryString.length);
 		const bytes = new Uint8Array(binaryString.length);
 		for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-		const blob = new Blob([bytes], { type: 'audio/webm' });
+		const type = isTTS ? 'audio/webm' : 'audio/wav';
+		const blob = new Blob([bytes], { type: type });
 		const url = URL.createObjectURL(blob);
 		const audio = new Audio(url);
 		audioQueue.push(audio);
@@ -242,7 +243,7 @@ socket.on('playback_error', (data) => {
 socket.on('tts_chunk_ready', (data) => {
 	console.log('Received TTS chunk');
 	socket.emit('log_event', `Received TTS chunk ${chunkCount}`);
-	decodeAndPlayAudio(data.chunk).then(() => {
+	decodeAndPlayAudio(data.chunk, true).then(() => {
 		chunkCount++;
 		startPlayback();
 	}).catch(() => {});
