@@ -18,6 +18,7 @@ import warnings
 import queue
 from vad import VAD
 from datetime import datetime
+import wave
 
 warnings.filterwarnings("ignore", category=UserWarning, module="speechbrain")
 
@@ -117,11 +118,10 @@ whisper_model = get_whisper_model()
 # Utility functions
 def get_file_duration(filename):
     try:
-        result = subprocess.run([
-            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1', filename
-        ], capture_output=True, text=True, check=True)
-        return float(result.stdout.strip())
+        with wave.open(filename, 'rb') as wav_file:
+            frames = wav_file.getnframes()
+            rate = wav_file.getframerate()
+            return frames / rate
     except Exception as e:
         print(f"Error getting duration of {filename}: {e}")
         return 0
@@ -197,15 +197,21 @@ def start_recording():
     start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
     filename = f"mic_recording_Start_{sid}_{start_timestamp}.wav"
     client_files[sid] = {
-        'file': open(filename, 'wb'), 
+        'file': open(filename, 'wb'),
         'lock': threading.Lock(),
         'start_time': start_time,
-        'temp_filename': filename
+        'temp_filename': filename,
+        'total_samples': 0
     }
-    client_chunks[sid] = {'header': None, 'chunk_count': 0}
+    client_chunks[sid] = {'chunk_count': 0}
     last_recordings[sid] = filename
     emit('recording_started', {'filename': filename})
     print(f"Started recording for session {sid}, saving to {filename}")
+
+import soundfile as sf
+import io
+import librosa
+import numpy as np
 
 @socketio.on('audio_chunk_data')
 def handle_audio_chunk_data(data):
@@ -217,34 +223,71 @@ def handle_audio_chunk_data(data):
         start_time = time.time()
         binary_data = base64.b64decode(data)
         with client_files[sid]['lock']:
-            if client_files[sid]['file'].closed:
-                print(f"File for session {sid} is closed, ignoring chunk")
-                return
             client_files[sid]['file'].write(binary_data)
             client_files[sid]['file'].flush()
+            prev_samples = client_files[sid]['total_samples']
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f")[:-3]
+        chunk_filename = f"chunk_{timestamp}.wav"
+        target_framerate = vad.sample_rate
         if client_chunks[sid]['chunk_count'] == 0:
-            client_chunks[sid]['chunk_count'] += 1
-            print(f"Stored header for session {sid}, size: {len(binary_data)}, first 20 bytes: {binary_data[:20].hex()}")
-            return
-        client_chunks[sid]['chunk_count'] += 1
-        temp_dir = tempfile.mkdtemp()
-        try:
-            temp_wav = os.path.join(temp_dir, "chunk.wav")
-            with open(temp_wav, 'wb') as f:
+            # Save first chunk
+            with open(chunk_filename, 'wb') as f:
                 f.write(binary_data)
-            if os.path.exists(temp_wav):
-                # Feed chunk to VAD
-                vad.add_audio_chunk(temp_wav)
-            else:
-                print(f"WAV file not created for session {sid}")
-                emit('processing_error', {'message': 'WAV file creation failed'})
-        finally:
-            shutil.rmtree(temp_dir)
+            # Load with soundfile to get format
+            with sf.SoundFile(io.BytesIO(binary_data), 'r') as sf_file:
+                chunk_samples = sf_file.frames
+                channels = sf_file.channels
+                input_framerate = sf_file.samplerate
+                if channels != 1:
+                    raise ValueError(f"First chunk invalid format: channels={channels}, expected 1")
+                pcm_data = sf_file.read(dtype='float32')
+                if input_framerate != target_framerate:
+                    pcm_data = librosa.resample(pcm_data, orig_sr=input_framerate, target_sr=target_framerate)
+                    chunk_samples = len(pcm_data)
+                    print(f"Resampled first chunk from {input_framerate}Hz to {target_framerate}Hz: {chunk_samples} samples")
+                pcm_data = (pcm_data * 32767).astype('int16')
+                print(f"First chunk verified: {chunk_samples} samples, input_framerate={input_framerate}Hz, {len(binary_data)} bytes, head={binary_data[:8].hex() if len(binary_data) >= 8 else binary_data.hex()}")
+            # Store framerate for seeking
+            client_files[sid]['input_framerate'] = input_framerate
+            # Rewrite as WAV for VAD
+            with wave.open(chunk_filename, 'wb') as chunk_wav:
+                chunk_wav.setnchannels(1)
+                chunk_wav.setsampwidth(2)
+                chunk_wav.setframerate(target_framerate)
+                chunk_wav.writeframes(pcm_data.tobytes())
+            client_files[sid]['total_samples'] = chunk_samples
+        else:
+            # Seek to previous end (require input_framerate)
+            if 'input_framerate' not in client_files[sid]:
+                raise ValueError(f"Input framerate not set for session {sid}, cannot process chunk")
+            input_framerate = client_files[sid]['input_framerate']
+            seek_samples = int(prev_samples * input_framerate / target_framerate)
+            with sf.SoundFile(client_files[sid]['temp_filename'], 'r') as main_file:
+                print(f"Seeking to {seek_samples} samples ({input_framerate}Hz, equiv to {prev_samples} at {target_framerate}Hz)")
+                main_file.seek(seek_samples)
+                chunk_data = main_file.read(dtype='float32')
+                raw_samples = len(chunk_data)
+                chunk_data = librosa.resample(chunk_data, orig_sr=input_framerate, target_sr=target_framerate)
+                chunk_samples = len(chunk_data)
+                chunk_data = (chunk_data * 32767).astype('int16')
+                print(f"Subsequent chunk read: {raw_samples} raw samples ({input_framerate}Hz), resampled to {chunk_samples} samples ({target_framerate}Hz), head={binary_data[:8].hex() if len(binary_data) >= 8 else binary_data.hex()}")
+            with wave.open(chunk_filename, 'wb') as chunk_wav:
+                chunk_wav.setnchannels(1)
+                chunk_wav.setsampwidth(2)
+                chunk_wav.setframerate(target_framerate)
+                chunk_wav.writeframes(chunk_data.tobytes())
+            client_files[sid]['total_samples'] += chunk_samples
+        if os.path.exists(chunk_filename):
+            vad.add_audio_chunk(chunk_filename)
+        else:
+            print(f"WAV file not created for session {sid}")
+            emit('processing_error', {'message': 'WAV file creation failed'})
+        client_chunks[sid]['chunk_count'] += 1
         print(f"Chunk processing took {time.time() - start_time}s")
     except Exception as e:
-        print(f"Error processing audio chunk for session {sid}: {e}")
+        print(f"Error processing audio chunk for session {sid}: {e}, binary_data head={binary_data[:8].hex() if len(binary_data) >= 8 else binary_data.hex()}")
         emit('processing_error', {'message': f'Error processing audio chunk: {str(e)}'})
-
+        
 @socketio.on('stop_recording')
 def stop_recording():
     sid = request.sid
@@ -252,18 +295,14 @@ def stop_recording():
         end_time = datetime.now()
         start_time = client_files[sid]['start_time']
         temp_filename = client_files[sid]['temp_filename']
-        
         with client_files[sid]['lock']:
             client_files[sid]['file'].close()
-            
-        # Create final filename with start and end timestamps
         start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
         end_timestamp = end_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
         final_filename = f"mic_recording_Start_{sid}_{start_timestamp}____End{end_timestamp}.wav"
-        
         if os.path.exists(temp_filename):
             try:
-                shutil.move(temp_filename, final_filename)
+                os.rename(temp_filename, final_filename)
                 last_recordings[sid] = final_filename
                 print(f"Saved WAV file for session {sid}: {final_filename}, duration: {get_file_duration(final_filename)}s")
             except Exception as e:
