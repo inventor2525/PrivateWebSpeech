@@ -16,8 +16,7 @@ setup(
         "kokoro",
         "faster-whisper",
         "pyannote.audio",
-        "numpy",
-		"pydub"
+        "numpy"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

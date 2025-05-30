@@ -46,6 +46,7 @@ def vad_segment_processor():
     for segment in vad.voice_segments():
         start_time = segment['start_time']
         end_time = segment['end_time']
+        wav_path = segment['wav_path']
         print(f"VAD segment: {start_time} to {end_time}")
         
         # Create timestamp strings for file naming
@@ -53,22 +54,13 @@ def vad_segment_processor():
         end_timestamp = end_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
         timestamp_suffix = f"Start{start_timestamp}____End{end_timestamp}"
         
-        # Save VAD audio segment
-        audio_segment = segment['audio']
+        # Use the existing WAV file directly
         vad_audio_filename = f"vad_audio_{timestamp_suffix}.wav"
-        audio_segment.export(vad_audio_filename, format="wav")
-        print(f"Saved VAD audio segment: {vad_audio_filename}")
-        
-        # Create temporary file for transcription
-        temp_dir = tempfile.mkdtemp()
+        os.rename(wav_path, vad_audio_filename)  # Rename for consistency
         try:
-            # Export audio segment to temporary WAV file for transcription
-            temp_wav_path = os.path.join(temp_dir, "vad_segment.wav")
-            audio_segment.export(temp_wav_path, format="wav")
-            
             # Transcribe the audio segment
             model = get_whisper_model()
-            segments, _ = model.transcribe(temp_wav_path, beam_size=5)
+            segments, _ = model.transcribe(vad_audio_filename, beam_size=5)
             transcription_text = ' '.join([s.text for s in segments])
             
             # Save transcription (always, even if empty)
@@ -90,8 +82,6 @@ def vad_segment_processor():
                 
         except Exception as e:
             print(f"Error transcribing VAD segment: {e}")
-        finally:
-            shutil.rmtree(temp_dir)
 
 vad_processor_thread = threading.Thread(target=vad_segment_processor, daemon=True)
 vad_processor_thread.start()

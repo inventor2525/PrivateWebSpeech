@@ -5,7 +5,6 @@ import torch
 from datetime import datetime
 from pyannote.audio import Model
 from pyannote.audio.pipelines import VoiceActivityDetection
-from pydub import AudioSegment
 import soundfile as sf
 from dataclasses import dataclass
 from typing import Iterator, Dict, List
@@ -301,12 +300,24 @@ class VAD:
 				self.silent_peeks_buffer = self.silent_peeks_buffer[-(i+1):]
 				break
 
-	def voice_segments(self) -> Iterator[Dict[str, AudioSegment | datetime]]:
+	def _save_segment_to_wav(self, segment_data: np.ndarray, start_time: datetime, end_time: datetime) -> str:
+		"""Save audio segment to WAV file and return the file path."""
+		start_timestamp = start_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
+		end_timestamp = end_time.strftime("%Y-%m-%d__%H-%M-%S.%f")[:-3]
+		wav_filename = f"vad_audio_Start{start_timestamp}____End{end_timestamp}.wav"
+		
+		# Scale float64 [-1, 1] to int16 [-32768, 32767]
+		scaled_data = (segment_data * 32767).astype(np.int16)
+		sf.write(wav_filename, scaled_data, self.sample_rate)
+		print(f"Saved VAD audio segment: {wav_filename}")
+		return wav_filename
+
+	def voice_segments(self) -> Iterator[Dict[str, str | datetime]]:
 		"""
-		Iterates AudioSegments containing voice as they become available.
+		Iterates paths to WAV files containing voice as they become available.
 
 		Yields:
-			dict: Contains AudioSegment, start_time, and end_time.
+			dict: Contains path to WAV file, start_time, and end_time.
 		"""
 		while self.running:
 			self.segment_available.wait()  # Wait for a segment to become available
@@ -316,17 +327,10 @@ class VAD:
 					if not self.vocal_segments:
 						self.segment_available.clear()  # Clear the event if no more segments
 					yield_time = datetime.now()
-					print(f"yielding audio stopped {(yield_time-segment.end_time).total_seconds()} seconds ago.")
-					# Scale float64 [-1, 1] to int16 [-32768, 32767]
-					scaled_data = (segment.data * 32767).astype(np.int16)
-					audio_segment = AudioSegment(
-						data=scaled_data.tobytes(),
-						sample_width=2,  # 16-bit PCM
-						frame_rate=self.sample_rate,
-						channels=1
-					)
+					print(f"yielding audio stopped {(yield_time - segment.end_time).total_seconds()} seconds ago.")
+					wav_path = self._save_segment_to_wav(segment.data, segment.start_time, segment.end_time)
 					yield {
-						"audio": audio_segment,
+						"wav_path": wav_path,
 						"start_time": segment.start_time,
 						"end_time": segment.end_time
 					}
