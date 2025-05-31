@@ -222,34 +222,51 @@ def handle_audio_chunk_data(data):
     try:
         start_time = time.time()
         binary_data = base64.b64decode(data)
+        if len(binary_data) < 100:  # Skip small/incomplete chunks
+            print(f"Skipping small chunk for session {sid}: {len(binary_data)} bytes, head={binary_data[:32].hex() if len(binary_data) >= 32 else binary_data.hex()}")
+            return
         with client_files[sid]['lock']:
             client_files[sid]['file'].write(binary_data)
             client_files[sid]['file'].flush()
             prev_samples = client_files[sid]['total_samples']
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S.%f")[:-3]
         chunk_filename = f"chunk_{timestamp}.wav"
-        target_framerate = vad.sample_rate
+        target_framerate = vad.sample_rate  # From vad.py, 16000
         if client_chunks[sid]['chunk_count'] == 0:
             # Save first chunk
             with open(chunk_filename, 'wb') as f:
                 f.write(binary_data)
             # Load with soundfile to get format
-            with sf.SoundFile(io.BytesIO(binary_data), 'r') as sf_file:
-                chunk_samples = sf_file.frames
-                channels = sf_file.channels
-                input_framerate = sf_file.samplerate
-                if channels != 1:
-                    raise ValueError(f"First chunk invalid format: channels={channels}, expected 1")
-                pcm_data = sf_file.read(dtype='float32')
+            try:
+                with sf.SoundFile(io.BytesIO(binary_data), 'r') as sf_file:
+                    chunk_samples = sf_file.frames
+                    channels = sf_file.channels
+                    input_framerate = sf_file.samplerate
+                    if channels != 1:
+                        raise ValueError(f"First chunk invalid format: channels={channels}, expected 1")
+                    pcm_data = sf_file.read(dtype='float32')
+                    if input_framerate != target_framerate:
+                        pcm_data = librosa.resample(pcm_data, orig_sr=input_framerate, target_sr=target_framerate)
+                        chunk_samples = len(pcm_data)
+                        print(f"Resampled first chunk from {input_framerate}Hz to {target_framerate}Hz: {chunk_samples} samples")
+                    pcm_data = (pcm_data * 32767).astype('int16')
+                    print(f"First chunk verified: {chunk_samples} samples, input_framerate={input_framerate}Hz, {len(binary_data)} bytes, head={binary_data[:32].hex() if len(binary_data) >= 32 else binary_data.hex()}")
+            except Exception as e:
+                print(f"Failed to process first chunk for session {sid}: {e}, {len(binary_data)} bytes, head={binary_data[:32].hex() if len(binary_data) >= 32 else binary_data.hex()}")
+                # Fallback: Treat as raw PCM (16-bit, assume 48kHz)
+                input_framerate = 48000
+                pcm_data = np.frombuffer(binary_data, dtype='int16').astype('float32') / 32767
+                if len(pcm_data) == 0:
+                    print(f"Empty PCM data for session {sid}, skipping chunk")
+                    return
                 if input_framerate != target_framerate:
                     pcm_data = librosa.resample(pcm_data, orig_sr=input_framerate, target_sr=target_framerate)
-                    chunk_samples = len(pcm_data)
-                    print(f"Resampled first chunk from {input_framerate}Hz to {target_framerate}Hz: {chunk_samples} samples")
+                chunk_samples = len(pcm_data)
                 pcm_data = (pcm_data * 32767).astype('int16')
-                print(f"First chunk verified: {chunk_samples} samples, input_framerate={input_framerate}Hz, {len(binary_data)} bytes, head={binary_data[:8].hex() if len(binary_data) >= 8 else binary_data.hex()}")
+                print(f"Fallback: Treated first chunk as raw PCM: {chunk_samples} samples, assumed {input_framerate}Hz")
             # Store framerate for seeking
             client_files[sid]['input_framerate'] = input_framerate
-            # Rewrite as WAV for VAD
+            # Write as WAV for VAD
             with wave.open(chunk_filename, 'wb') as chunk_wav:
                 chunk_wav.setnchannels(1)
                 chunk_wav.setsampwidth(2)
@@ -262,15 +279,28 @@ def handle_audio_chunk_data(data):
                 raise ValueError(f"Input framerate not set for session {sid}, cannot process chunk")
             input_framerate = client_files[sid]['input_framerate']
             seek_samples = int(prev_samples * input_framerate / target_framerate)
-            with sf.SoundFile(client_files[sid]['temp_filename'], 'r') as main_file:
-                print(f"Seeking to {seek_samples} samples ({input_framerate}Hz, equiv to {prev_samples} at {target_framerate}Hz)")
-                main_file.seek(seek_samples)
-                chunk_data = main_file.read(dtype='float32')
-                raw_samples = len(chunk_data)
-                chunk_data = librosa.resample(chunk_data, orig_sr=input_framerate, target_sr=target_framerate)
-                chunk_samples = len(chunk_data)
-                chunk_data = (chunk_data * 32767).astype('int16')
-                print(f"Subsequent chunk read: {raw_samples} raw samples ({input_framerate}Hz), resampled to {chunk_samples} samples ({target_framerate}Hz), head={binary_data[:8].hex() if len(binary_data) >= 8 else binary_data.hex()}")
+            try:
+                with sf.SoundFile(client_files[sid]['temp_filename'], 'r') as main_file:
+                    print(f"Seeking to {seek_samples} samples ({input_framerate}Hz, equiv to {prev_samples} at {target_framerate}Hz)")
+                    main_file.seek(seek_samples)
+                    chunk_data = main_file.read(dtype='float32')
+                    raw_samples = len(chunk_data)
+                    chunk_data = librosa.resample(chunk_data, orig_sr=input_framerate, target_sr=target_framerate)
+                    chunk_samples = len(chunk_data)
+                    chunk_data = (chunk_data * 32767).astype('int16')
+                    print(f"Subsequent chunk read: {raw_samples} raw samples ({input_framerate}Hz), resampled to {chunk_samples} samples ({target_framerate}Hz), head={binary_data[:32].hex() if len(binary_data) >= 32 else binary_data.hex()}")
+            except Exception as e:
+                print(f"Failed to seek main file for session {sid}: {e}, {len(binary_data)} bytes, head={binary_data[:32].hex() if len(binary_data) >= 32 else binary_data.hex()}")
+                # Fallback: Treat binary_data as raw PCM
+                pcm_data = np.frombuffer(binary_data, dtype='int16').astype('float32') / 32767
+                if len(pcm_data) == 0:
+                    print(f"Empty PCM data for session {sid}, skipping chunk")
+                    return
+                if input_framerate != target_framerate:
+                    pcm_data = librosa.resample(pcm_data, orig_sr=input_framerate, target_sr=target_framerate)
+                chunk_samples = len(pcm_data)
+                chunk_data = (pcm_data * 32767).astype('int16')
+                print(f"Fallback: Treated subsequent chunk as raw PCM: {chunk_samples} samples, {input_framerate}Hz")
             with wave.open(chunk_filename, 'wb') as chunk_wav:
                 chunk_wav.setnchannels(1)
                 chunk_wav.setsampwidth(2)
@@ -285,7 +315,7 @@ def handle_audio_chunk_data(data):
         client_chunks[sid]['chunk_count'] += 1
         print(f"Chunk processing took {time.time() - start_time}s")
     except Exception as e:
-        print(f"Error processing audio chunk for session {sid}: {e}, binary_data head={binary_data[:8].hex() if len(binary_data) >= 8 else binary_data.hex()}")
+        print(f"Error processing audio chunk for session {sid}: {e}, binary_data head={binary_data[:32].hex() if len(binary_data) >= 32 else binary_data.hex()}")
         emit('processing_error', {'message': f'Error processing audio chunk: {str(e)}'})
         
 @socketio.on('stop_recording')
